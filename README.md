@@ -17,7 +17,7 @@ If not, compile [CMake from source](https://cmake.org/download/#latest) first.
 ## Build instructions
 
 ```
-git clone --depth 1 https://github.com/maxnet/pico-webserver
+git clone --depth 1 https://github.com/LexGridnev/pico-webserver
 cd pico-webserver
 git submodule update --init
 mkdir -p build
