@@ -8,3 +8,6 @@
 [submodule "lwip"]
 	path = lwip
 	url = https://git.savannah.nongnu.org/git/lwip.git
+[submodule "pico-examples"]
+	path = pico-examples
+	url = https://github.com/raspberrypi/pico-examples.git
