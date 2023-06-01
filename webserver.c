@@ -1,64 +1,78 @@
 #include "pico/stdlib.h"
-#include "pico/bootrom.h"
-#include "hardware/watchdog.h"
-#include "hardware/structs/watchdog.h"
-
+#include "hardware/pio.h"
+#include "hardware/clocks.h"
+#include "ws2812.pio.h"
 #include "tusb_lwip_glue.h"
 
-#include <stdio.h>
+#define LED_PIN 16
+#define NUM_PIXELS 1
 
-#define LED_PIN     25
-#define MIN_FREQ    1
-#define MAX_FREQ    500
+static PIO pio;
+static uint sm;
+static uint offset;
 
-// LED control variables
-bool led_state = false;
-bool led_manual_control = false;
-uint32_t freq_ms = 500;  // Default frequency in milliseconds
+static uint32_t pixel_colors[NUM_PIXELS] = {0};
 
-// let our webserver do some dynamic handling
-static const char *cgi_toggle_led(int iIndex, int iNumParams, char *pcParam[], char *pcValue[])
+static const char *cgi_update_led(int iIndex, int iNumParams, char *pcParam[], char *pcValue[])
 {
-    led_state = !led_state;
-    gpio_put(LED_PIN, led_state);
-    led_manual_control = led_state;
-    return "/index.html";
-}
-
-static const char *cgi_reset_usb_boot(int iIndex, int iNumParams, char *pcParam[], char *pcValue[])
-{
-    reset_usb_boot(0, 0);
-    return "/index.html";
-}
-
-static const char *cgi_set_frequency(int iIndex, int iNumParams, char *pcParam[], char *pcValue[])
-{
-    char *endptr;
-    long value = strtol(pcValue[0], &endptr, 10);
-    if (endptr == pcValue[0] || *endptr != '\0' || value < MIN_FREQ || value > MAX_FREQ) {
-        return "/index.html";  // Invalid frequency, redirect back to index
+    uint8_t red = 0, green = 0, blue = 0, brightness = 0;
+    for (int i = 0; i < iNumParams; i++) {
+        if (strcmp(pcParam[i], "red") == 0) {
+            red = atoi(pcValue[i]);
+        } else if (strcmp(pcParam[i], "green") == 0) {
+            green = atoi(pcValue[i]);
+        } else if (strcmp(pcParam[i], "blue") == 0) {
+            blue = atoi(pcValue[i]);
+        } else if (strcmp(pcParam[i], "brightness") == 0) {
+            brightness = atoi(pcValue[i]);
+        }
     }
-    freq_ms = (uint32_t)(1000 / value);
+
+    uint32_t color = ((uint32_t)(red) << 16) | ((uint32_t)(green) << 8) | (uint32_t)(blue);
+    uint32_t adjusted_brightness = (brightness * 255) / 100;
+    color = (color & 0x00FFFFFF) | (adjusted_brightness << 24);
+
+    for (int i = 0; i < NUM_PIXELS; i++) {
+        pixel_colors[i] = color;
+    }
+
     return "/index.html";
 }
 
 static const tCGI cgi_handlers[] = {
     {
-        "/toggle_led",
-        cgi_toggle_led
-    },
-    {
-        "/reset_usb_boot",
-        cgi_reset_usb_boot
-    },
-    {
-        "/set_frequency",
-        cgi_set_frequency
+        "/update_led",
+        cgi_update_led
     }
 };
 
+void ws2812_init()
+{
+    pio = pio0;
+    sm = 0;
+    offset = pio_add_program(pio, &ws2812_program);
+
+    pio_gpio_init(pio, LED_PIN);
+    pio_sm_config config = ws2812_program_get_default_config(offset);
+    sm_config_set_sideset_pins(&config, LED_PIN);
+    sm_config_set_out_shift(&config, false, true, 0);
+    sm_config_set_fifo_join(&config, PIO_FIFO_JOIN_RX);
+
+    pio_sm_init(pio, sm, offset, &config);
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+void ws2812_update()
+{
+    for (int i = 0; i < NUM_PIXELS; i++) {
+        pio_sm_put_blocking(pio, sm, pixel_colors[i]);
+    }
+}
+
 int main()
 {
+    stdio_init_all();
+
     // Initialize tinyusb, lwip, dhcpd, and httpd
     init_lwip();
     wait_for_netif_is_up();
@@ -66,29 +80,17 @@ int main()
     httpd_init();
     http_set_cgi_handlers(cgi_handlers, LWIP_ARRAYSIZE(cgi_handlers));
 
-    // For toggle_led
-    gpio_init(LED_PIN);
-    gpio_set_dir(LED_PIN, GPIO_OUT);
+    // Initialize WS2812 LED
+    ws2812_init();
 
-    uint32_t last_toggle_time = 0;
-
-    while (true)
-    {
+    while (true) {
         tud_task();
         service_traffic();
 
-        // Strobe the LED at the desired frequency if manual control is enabled
-        if (led_manual_control)
-        {
-            uint32_t current_time = to_ms_since_boot(get_absolute_time());
-            if (current_time - last_toggle_time >= freq_ms)
-            {
-                last_toggle_time = current_time;
-                led_state = !led_state;
-                gpio_put(LED_PIN, led_state);
-            }
-        }
+        // Update WS2812 LED
+        ws2812_update();
     }
 
     return 0;
 }
+``
